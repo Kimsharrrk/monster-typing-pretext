@@ -43,10 +43,19 @@ export function bakeShapeLayout(
       const line = layoutNextLine(prepared, cursor, targS.w);
       if (!line) break;
       
-      const xStart = targS.offsetX - (line.width / 2);
+      // Center-align text within the shape's segment boundary for a more beautiful, balanced look
+      const textWidth = line.text.length * charWidth;
+      const xStart = targS.offsetX - (targS.w / 2) + Math.max(0, (targS.w - textWidth) / 2);
       
       let currentX = xStart;
+      let isFirstCharOnLine = true;
       for (const char of line.text) {
+        if (isFirstCharOnLine && char === ' ') {
+          // Skip leading spaces to avoid ragged left edges
+          continue;
+        }
+        isFirstCharOnLine = false;
+        
         cells.push({
           id: cellId++,
           x: currentX,

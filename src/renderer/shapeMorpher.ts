@@ -16,9 +16,21 @@ export function initMorpher() {
   }
 }
 
+const loadQueue: Record<string, (() => void)[]> = {};
+
 export function loadShapePixels(iconName: string, callback?: () => void) {
-  if (shapePixelCache[iconName]) {
-    if (callback && shapePixelCache[iconName] !== 'loading') callback();
+  initMorpher();
+  
+  if (shapePixelCache[iconName] && shapePixelCache[iconName] !== 'loading') {
+    if (callback) callback();
+    return;
+  }
+  
+  if (shapePixelCache[iconName] === 'loading') {
+    if (callback) {
+      if (!loadQueue[iconName]) loadQueue[iconName] = [];
+      loadQueue[iconName].push(callback);
+    }
     return;
   }
   
@@ -29,12 +41,103 @@ export function loadShapePixels(iconName: string, callback?: () => void) {
       return;
   }
   
+  // Image URL loading
+  if (iconName.startsWith('http') || iconName.startsWith('/') || iconName.startsWith('./') || iconName.startsWith('data:')) {
+    shapePixelCache[iconName] = 'loading';
+    const img = new Image();
+    img.crossOrigin = 'Anonymous';
+    
+    if (callback) {
+      if (!loadQueue[iconName]) loadQueue[iconName] = [];
+      loadQueue[iconName].push(callback);
+    }
+    
+    img.onload = () => {
+      if (!offCtx) return;
+      offCtx.clearRect(0, 0, MASK_RESOLUTION, MASK_RESOLUTION);
+      
+      // Keep aspect ratio
+      const scale = Math.min(MASK_RESOLUTION / img.width, MASK_RESOLUTION / img.height);
+      const w = img.width * scale;
+      const h = img.height * scale;
+      const x = (MASK_RESOLUTION - w) / 2;
+      const y = (MASK_RESOLUTION - h) / 2;
+      
+      offCtx.drawImage(img, x, y, w, h);
+      
+      const imgData = offCtx.getImageData(0, 0, MASK_RESOLUTION, MASK_RESOLUTION).data;
+      const bounds: any[] = [];
+      
+      for (let py = 0; py < MASK_RESOLUTION; py++) {
+        const rowSegments = [];
+        let inSegment = false;
+        let firstX = 0;
+        for (let px = 0; px < MASK_RESOLUTION; px++) {
+          const idx = (py * MASK_RESOLUTION + px) * 4;
+          const r = imgData[idx];
+          const g = imgData[idx + 1];
+          const b = imgData[idx + 2];
+          const alpha = imgData[idx + 3];
+          // Treat near-white or transparent pixels as background
+          if (alpha > 20 && (r < 240 || g < 240 || b < 240)) { // threshold
+            if (!inSegment) {
+              inSegment = true;
+              firstX = px;
+            }
+          } else {
+            if (inSegment) {
+              inSegment = false;
+              rowSegments.push({
+                w: (px - 1) - firstX + 1,
+                xOffset: ((px - 1) + firstX) / 2 - MASK_RESOLUTION / 2
+              });
+            }
+          }
+        }
+        if (inSegment) {
+          rowSegments.push({
+            w: (MASK_RESOLUTION - 1) - firstX + 1,
+            xOffset: ((MASK_RESOLUTION - 1) + firstX) / 2 - MASK_RESOLUTION / 2
+          });
+        }
+        bounds[py] = rowSegments;
+      }
+      
+      shapePixelCache[iconName] = bounds;
+      if (loadQueue[iconName]) {
+        loadQueue[iconName].forEach(cb => cb());
+        delete loadQueue[iconName];
+      }
+    };
+    
+    img.onerror = () => {
+      shapePixelCache[iconName] = null;
+      if (loadQueue[iconName]) {
+        loadQueue[iconName].forEach(cb => cb());
+        delete loadQueue[iconName];
+      }
+    };
+    
+    img.src = iconName;
+    return;
+  }
+  
   shapePixelCache[iconName] = 'loading';
   
   const iconData = (icons as any)[iconName];
   if (!iconData) {
     shapePixelCache[iconName] = null;
+    if (callback) callback();
+    if (loadQueue[iconName]) {
+      loadQueue[iconName].forEach(cb => cb());
+      delete loadQueue[iconName];
+    }
     return;
+  }
+  
+  if (callback) {
+    if (!loadQueue[iconName]) loadQueue[iconName] = [];
+    loadQueue[iconName].push(callback);
   }
   
   const rawSvg = createElement(iconData);
@@ -44,7 +147,7 @@ export function loadShapePixels(iconName: string, callback?: () => void) {
   
   const children = rawSvg.querySelectorAll ? rawSvg.querySelectorAll('*') : [];
   children.forEach((child: any) => {
-    child.setAttribute('fill', 'none');
+    child.setAttribute('fill', 'black');
     child.setAttribute('stroke', 'black');
     child.setAttribute('stroke-width', '2');
     child.setAttribute('stroke-linecap', 'round');
@@ -57,7 +160,10 @@ export function loadShapePixels(iconName: string, callback?: () => void) {
   
   const img = new Image();
   img.onload = () => {
-    if (!offCtx) return;
+    if (!offCtx) {
+      console.warn("offCtx is not initialized!");
+      return;
+    }
     offCtx.clearRect(0, 0, MASK_RESOLUTION, MASK_RESOLUTION);
     offCtx.drawImage(img, 0, 0, MASK_RESOLUTION, MASK_RESOLUTION);
     
@@ -97,7 +203,10 @@ export function loadShapePixels(iconName: string, callback?: () => void) {
     
     shapePixelCache[iconName] = bounds;
     URL.revokeObjectURL(url);
-    if (callback && shapePixelCache[iconName] !== 'loading') callback();
+    if (loadQueue[iconName]) {
+      loadQueue[iconName].forEach(cb => cb());
+      delete loadQueue[iconName];
+    }
   };
   img.src = url;
 }

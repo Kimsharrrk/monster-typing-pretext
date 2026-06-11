@@ -4,65 +4,157 @@ import { UIAttacks } from '../skills/uiAttacks';
 
 export class InputHandler {
   state: GameState;
-  
-  constructor(state: GameState) {
+  onStart: () => void;
+  onReset: () => void;
+  onNextStage: () => void;
+  onSelectUpgrade: (type: 'HEAL' | 'MAX_HP' | 'SHIELD' | 'ATTACK' | 'SCORE') => void;
+
+  constructor(
+    state: GameState, 
+    onStart: () => void, 
+    onReset: () => void, 
+    onNextStage: () => void,
+    onSelectUpgrade: (type: 'HEAL' | 'MAX_HP' | 'SHIELD' | 'ATTACK' | 'SCORE') => void
+  ) {
     this.state = state;
-    this.setupListeners();
+    this.onStart = onStart;
+    this.onReset = onReset;
+    this.onNextStage = onNextStage;
+    this.onSelectUpgrade = onSelectUpgrade;
+    
+    window.addEventListener('keydown', (e) => this.handleKey(e));
   }
 
-  setupListeners() {
-    window.addEventListener('keydown', (e) => {
-      this.triggerPendingAttacks();
+  handleKey(e: KeyboardEvent) {
+    if (this.state.screen === 'MENU') {
+      if (e.key === '1') {
+        this.state.gameMode = 'PRACTICE';
+        this.state.screen = 'STAGE_SELECT';
+      }
+      if (e.key === '2') {
+        this.state.gameMode = 'CHALLENGE';
+        this.onStart();
+      }
+      if (e.key === '3') {
+        this.state.screen = 'SETTINGS';
+      }
+      return;
+    }
+    
+    if (this.state.screen === 'CHALLENGE_UPGRADE') {
+      if (e.key === '1' || e.key === '2' || e.key === '3') {
+        const idx = parseInt(e.key) - 1;
+        const opt = this.state.upgradeOptions[idx];
+        if (opt) {
+          this.onSelectUpgrade(opt.type);
+        }
+      }
+      return;
+    }
+    
+    if (this.state.screen === 'STAGE_SELECT') {
+      if (e.key === 'Escape') this.state.screen = 'MENU';
+      const num = parseInt(e.key);
+      if (!isNaN(num) && num >= 1 && num <= 5) {
+        this.state.startingChapter = num;
+        this.onStart();
+      }
+      return;
+    }
+    
+    if (this.state.screen === 'SETTINGS') {
+      if (e.key === 'Escape') this.state.screen = 'MENU';
+      if (e.key === '1') this.state.enableUIAttacks = !this.state.enableUIAttacks;
+      if (e.key === '2') {
+        const diffs: ('EASY'|'NORMAL'|'HARD')[] = ['EASY', 'NORMAL', 'HARD'];
+        const idx = diffs.indexOf(this.state.difficulty);
+        this.state.difficulty = diffs[(idx + 1) % diffs.length];
+      }
+      return;
+    }
+    
+    if (this.state.screen === 'GAMEOVER') {
+      if (e.key === 'Enter') {
+        this.onReset();
+      }
+      return;
+    }
 
-      if (e.key === 'Tab') {
-        e.preventDefault();
-        this.state.isSkillMode = !this.state.isSkillMode;
+    if (this.state.screen === 'PLAYING') {
+      if (this.state.stageClearWaiting && e.key === 'Enter') {
+        this.onNextStage();
+        return;
+      }
+      if (this.state.stageClearWaiting) return;
+
+      const menus: ('FIGHT' | 'ACT' | 'ITEM' | 'MERCY')[] = ['FIGHT', 'ACT', 'ITEM', 'MERCY'];
+      if (e.key === 'ArrowLeft') {
+        const idx = menus.indexOf(this.state.activeMenu);
+        this.state.activeMenu = menus[(idx - 1 + menus.length) % menus.length];
         this.state.inputText = '';
         return;
       }
-      
-      if (e.key === 'Backspace') {
-        this.state.inputText = this.state.inputText.slice(0, -1);
+      if (e.key === 'ArrowRight') {
+        const idx = menus.indexOf(this.state.activeMenu);
+        this.state.activeMenu = menus[(idx + 1) % menus.length];
+        this.state.inputText = '';
         return;
       }
-      
-      if (e.key === 'Enter') {
+
+      if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
         e.preventDefault();
-        if (this.state.isSkillMode && this.state.inputText.trim() !== '') {
-          this.executeSkill(this.state.inputText.trim());
-          this.state.inputText = '';
-          this.state.isSkillMode = false;
-        }
-        return;
-      }
-
-      if (e.key === ' ') {
-        e.preventDefault(); // Prevent scrolling
-      }
-
-      if (e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1) {
-        return;
-      }
-      
-      if (this.state.isSkillMode) {
-        this.state.inputText += e.key;
-      } else {
-        // We do not append to inputText for visual, because the boss IS the text.
-        // But let's show what was typed briefly.
-        this.state.inputText += e.key;
-        setTimeout(() => {
-          if (!this.state.isSkillMode && this.state.inputText.length > 0) {
-             this.state.inputText = this.state.inputText.slice(1);
-          }
-        }, 300);
         
-        this.handleCharHit(e.key);
+        if (this.state.activeMenu === 'FIGHT') {
+          this.handleCharHit(e.key);
+        } else {
+          if (e.key.match(/[a-zA-Z]/)) {
+            this.state.inputText += e.key.toLowerCase();
+          }
+        }
       }
       
+      if (e.key === 'Backspace' && this.state.activeMenu !== 'FIGHT') {
+        this.state.inputText = this.state.inputText.slice(0, -1);
+      }
+      
+      if (e.key === 'Enter' && this.state.activeMenu !== 'FIGHT') {
+        const cmd = this.state.inputText;
+        this.state.inputText = '';
+        
+        if (this.state.activeMenu === 'ITEM') {
+          if ((cmd === 'heal' || cmd === 'potion') && this.state.score >= 500) {
+            this.state.score -= 500;
+            this.state.playerHp = Math.min(this.state.playerMaxHp, this.state.playerHp + 50);
+            this.state.bossDialog = "* You drank a Potion! Restored 50 HP. (-500 Score)";
+          } else {
+            this.state.bossDialog = "* Not enough score (need 500), or unknown item. Type 'heal'.";
+          }
+        } else if (this.state.activeMenu === 'ACT') {
+          if (cmd === 'taunt') {
+            this.state.bossDialog = "* You taunted the monster! It is angry!";
+          } else if (cmd === 'defend') {
+            this.state.bossDialog = "* You take a defensive stance! (Not implemented)";
+          } else {
+            this.state.bossDialog = "* Unknown action. Try 'taunt' or 'defend'.";
+          }
+        } else if (this.state.activeMenu === 'MERCY') {
+          if (cmd === 'spare') {
+            if (this.state.boss && this.state.boss.hp < this.state.boss.maxHp * 0.1) {
+              this.state.bossDialog = "* You spared the monster! (+2000 Score)";
+              this.state.score += 2000;
+              this.state.boss.hp = 0;
+              this.state.boss.isDeadState = true;
+            } else {
+              this.state.bossDialog = "* The monster's HP is too high to spare! (<10% needed)";
+            }
+          }
+        }
+      }
+
       if (this.state.startTime === 0) {
         this.state.startTime = performance.now();
       }
-    });
+    }
   }
   
   triggerPendingAttacks() {
@@ -76,6 +168,10 @@ export class InputHandler {
         UIAttacks.shakeScreen();
       } else if (attack === 'flip') {
         UIAttacks.flipScreen();
+      } else if (attack === 'blur') {
+        UIAttacks.blurScreen();
+      } else if (attack === 'invert') {
+        UIAttacks.invertColors();
       }
     }
   }
@@ -95,6 +191,30 @@ export class InputHandler {
   }
 
   handleCharHit(char: string) {
+    // Check if hitting a projectile first
+    let hitProjectile = false;
+    let targetProj = this.state.projectiles.find(p => p.typeIndex > 0);
+    
+    if (targetProj) {
+        hitProjectile = targetProj.hitChar(char);
+    } else {
+        // Find a projectile starting with the key
+        targetProj = this.state.projectiles.find(p => p.word[0] === char);
+        if (targetProj) {
+            hitProjectile = targetProj.hitChar(char);
+        }
+    }
+    
+    if (hitProjectile) {
+        const p = targetProj!;
+        if (p.isDead) {
+            this.state.score += 100;
+            this.state.damagePopups.push(new DamagePopup(p.x, p.y, 0)); // "DEFENDED"
+        }
+        this.state.particles.push(new Particle(p.x, p.y, char, '#ef4444', '20px "Press Start 2P", monospace'));
+        return;
+    }
+
     const target = this.state.boss;
     if (!target) return;
     

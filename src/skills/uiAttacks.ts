@@ -1,4 +1,14 @@
 export class UIAttacks {
+  static requestFullscreen() {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch((e) => {
+        console.warn("Fullscreen request failed:", e);
+      });
+    } else {
+      document.exitFullscreen();
+    }
+  }
+
   static shakeScreen(durationMs: number = 2000) {
     const canvas = document.getElementById('gameCanvas');
     if (!canvas) return;
@@ -33,34 +43,58 @@ export class UIAttacks {
       canvas.style.transform = 'rotate(0deg) scaleX(1)';
     }, durationMs);
   }
-  
-  static requestFullscreen() {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(err => {
-        console.warn(`Error attempting to enable fullscreen: ${err.message}`);
-      });
-    }
+
+  static blurScreen(durationMs: number = 4000) {
+    const canvas = document.getElementById('gameCanvas');
+    if (!canvas) return;
+    canvas.style.transition = 'filter 0.5s';
+    canvas.style.filter = 'blur(10px)';
+    setTimeout(() => {
+      canvas.style.filter = 'none';
+    }, durationMs);
   }
 
-  static async popupAttack() {
-    // Open a popup that tells the user to type a random code to close it
-    // Wait, due to popup blockers, we must do this on keydown.
-    const w = 400;
-    const h = 300;
-    const left = (window.screen.width / 2) - (w / 2);
-    const top = (window.screen.height / 2) - (h / 2);
-    const popup = window.open('', 'MonsterAttack', `width=${w},height=${h},top=${top},left=${left}`);
+  static invertColors(durationMs: number = 3000) {
+    const canvas = document.getElementById('gameCanvas');
+    if (!canvas) return;
+    canvas.style.transition = 'filter 0.1s';
+    canvas.style.filter = 'invert(100%) hue-rotate(180deg)';
+    setTimeout(() => {
+      canvas.style.filter = 'none';
+    }, durationMs);
+  }
+
+  static popupAttack() {
+    const popup = document.createElement('div');
+    popup.id = 'monster-fake-popup';
+    popup.style.position = 'fixed';
+    popup.style.top = Math.random() * 50 + 10 + '%';
+    popup.style.left = Math.random() * 50 + 10 + '%';
+    popup.style.width = '400px';
+    popup.style.height = '200px';
+    popup.style.backgroundColor = '#000';
+    popup.style.border = '4px solid #ef4444';
+    popup.style.boxShadow = '0 0 20px #ef4444';
+    popup.style.color = '#ef4444';
+    popup.style.zIndex = '9999';
+    popup.style.padding = '20px';
+    popup.style.fontFamily = '"Press Start 2P", monospace';
+    popup.style.display = 'flex';
+    popup.style.flexDirection = 'column';
+    popup.style.justifyContent = 'center';
+    popup.style.alignItems = 'center';
+    popup.style.textAlign = 'center';
+    popup.innerHTML = `
+      <h3 style="margin-bottom:20px;">VIRUS WARNING!</h3>
+      <p style="font-size:12px; line-height:1.5;">The monster has blocked your view! Keep typing to survive, or wait for the virus to pass.</p>
+    `;
     
-    if (popup) {
-      popup.document.write(`
-        <html style="background:#000; color:#ef4444; font-family:monospace; text-align:center; padding-top:50px;">
-          <h1>SYSTEM COMPROMISED</h1>
-          <p>The monster has hacked your window!</p>
-          <p>Please close this window to continue fighting.</p>
-        </html>
-      `);
-    } else {
-      console.warn("Popup blocked by browser.");
-    }
+    document.body.appendChild(popup);
+    
+    setTimeout(() => {
+      if (document.body.contains(popup)) {
+        document.body.removeChild(popup);
+      }
+    }, 5000);
   }
 }
