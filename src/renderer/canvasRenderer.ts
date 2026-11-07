@@ -1,6 +1,7 @@
 import { Monster } from '../entities/Monster';
 import { Particle, DamagePopup } from '../entities/Particle';
 import { Projectile } from '../entities/Projectile';
+import { FallingChar } from '../entities/FallingChar';
 
 export class CanvasRenderer {
   canvas: HTMLCanvasElement;
@@ -8,8 +9,8 @@ export class CanvasRenderer {
   width: number;
   height: number;
   
-  boxWidth: number = 0;
-  boxHeight: number = 250;
+  boxWidth: number = 800;
+  boxHeight: number = 180;
   boxX: number = 0;
   boxY: number = 0;
 
@@ -80,7 +81,8 @@ export class CanvasRenderer {
       const lineHeight = 28;
       
       if (boss.chapter === 1 && !boss.wordMode) {
-        const targetChar = boss.getCurrentTargetChar();
+        const targetChars = boss.getCurrentTargetChars();
+        const targetChar = targetChars.length > 0 ? targetChars[0] : null;
         if (targetChar !== null) {
           this.ctx.save();
           
@@ -306,22 +308,27 @@ export class CanvasRenderer {
     this.ctx.restore();
   }
 
-  renderMonster(boss: Monster, now: number, attackMotion: number = 0) {
+  renderMonster(
+    boss: Monster, 
+    now: number, 
+    bossAttackMotionRemaining: number = 0,
+    attackState: 'IDLE' | 'CHARGING' = 'IDLE',
+    attackTimer: number = 0,
+    attackChargeMax: number = 1
+  ) {
     if (!boss.isLoaded) return;
 
     this.ctx.save();
     
     // Attack motion (dash forward)
     let attackZ = 0;
-    if (attackMotion > 0) {
-      // 0.2s duration. Math.sin to make it go forward and back
-      const progress = attackMotion / 0.2; // 1 to 0
-      attackZ = Math.sin(progress * Math.PI) * 100; // dashes up to 100px forward
+    if (bossAttackMotionRemaining > 0) {
+      attackZ = Math.sin(bossAttackMotionRemaining * Math.PI * 5) * 20; 
     }
     
     const hoverY = Math.sin(now / 500) * 15;
     const cx = this.width / 2;
-    const cy = 250 + hoverY + attackZ; // dash towards player (downwards visually) 
+    const cy = 320 + hoverY + attackZ; // dash towards player (downwards visually) 
     
     boss.x = cx;
     boss.y = cy;
@@ -329,49 +336,94 @@ export class CanvasRenderer {
     const maxShapeSize = boss.width;
     const shapeTop = cy - maxShapeSize / 2;
     
-    // Draw background silhouette
-    this.ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
-    this.ctx.font = '10px "Fira Code", monospace';
-    this.ctx.textAlign = 'center';
-    for (const bgCell of boss.bgCells || []) {
-      if (!bgCell.isSpace) {
-        this.ctx.fillText('■', cx + bgCell.x, shapeTop + bgCell.y);
-      }
-    }
-    
     const font = `900 ${boss.fontSize}px "Fira Code", monospace`;
     this.ctx.font = font;
     this.ctx.textBaseline = 'top';
     this.ctx.textAlign = 'left';
     
     for (const cell of boss.cells) {
-      if (!cell.isActive) {
-        continue; 
+      if (cell.isSpace) continue;
+      let drawChar = cell.char;
+      
+      let isCompletedWord = false;
+      if (boss.wordMode) {
+         const g = boss.wordGroups.find(wg => wg.cells.some(c => c.id === cell.id));
+         if (g && g.isCompleted) isCompletedWord = true;
       }
       
-      let drawChar = cell.char;
-      if (cell.isSpace) {
-        if (cell.isTarget) drawChar = '_';
-        else continue;
+      if (isCompletedWord) {
+         continue;
       }
+      
+      let isFiller = true;
+      let isTyped = false;
+      
+      if (boss.wordMode) {
+         const g = boss.wordGroups.find(wg => wg.cells.some(c => c.id === cell.id));
+         if (g) {
+            isFiller = false;
+            const cellIndexInGroup = g.cells.findIndex(c => c.id === cell.id);
+            if (cellIndexInGroup < g.typeIndex) {
+               isTyped = true;
+            }
+         }
+      } else {
+         const targetIdx = boss.linearTargetIds.indexOf(cell.id);
+         if (targetIdx !== -1) {
+            isFiller = false;
+            if (targetIdx < boss.linearTypeIndex) {
+               isTyped = true;
+            }
+         }
+      }
+      
+      let color = '';
+      let shadow = 0;
+      
+      if (isFiller) {
+        color = '#ffffff'; 
+      } else if (isTyped) {
+        color = '#60a5fa'; // 작성한 텍스트 파란색
+      } else {
+        color = '#facc15';
+        if (cell.isTarget) {
+          shadow = 10;
+        }
+      }
+      
+      this.ctx.fillStyle = color;
+      this.ctx.shadowColor = color;
+      this.ctx.shadowBlur = shadow;
       
       if (cell.isTarget) {
-        this.ctx.fillStyle = '#a3e635'; 
-        this.ctx.shadowColor = '#a3e635';
-        this.ctx.shadowBlur = 10;
-        
         const scale = 1 + Math.sin(now / 100) * 0.1;
         this.ctx.save();
-        this.ctx.translate(cx + cell.x + 8, shapeTop + cell.y + 8);
+        this.ctx.translate(boss.x + cell.x + 8, shapeTop + cell.y + 8);
         this.ctx.scale(scale, scale);
         this.ctx.fillText(drawChar, -8, -8);
         this.ctx.restore();
-        
       } else {
-        this.ctx.fillStyle = '#ffffff'; 
-        this.ctx.shadowBlur = 0;
-        this.ctx.fillText(drawChar, cx + cell.x, shapeTop + cell.y);
+        this.ctx.fillText(drawChar, boss.x + cell.x, shapeTop + cell.y);
       }
+    }
+    
+    if (attackState === 'CHARGING') {
+      const barWidth = 200;
+      const barHeight = 8;
+      const chargeRatio = Math.max(0, Math.min(1, 1.0 - (attackTimer / attackChargeMax)));
+      const bx = boss.x - barWidth / 2;
+      const by = shapeTop - 30;
+      
+      this.ctx.fillStyle = 'rgba(239, 68, 68, 0.3)'; // red-500 low alpha
+      this.ctx.fillRect(bx, by, barWidth, barHeight);
+      this.ctx.fillStyle = 'rgba(239, 68, 68, 0.9)'; // red-500 high alpha
+      this.ctx.fillRect(bx, by, barWidth * chargeRatio, barHeight);
+      
+      this.ctx.fillStyle = '#ffffff';
+      this.ctx.font = '10px "Press Start 2P", monospace';
+      this.ctx.textAlign = 'center';
+      this.ctx.textBaseline = 'bottom';
+      this.ctx.fillText("CHARGING...", boss.x, by - 5);
     }
     
     this.ctx.restore();
@@ -399,6 +451,31 @@ export class CanvasRenderer {
     for (const p of particles) {
       p.draw(this.ctx);
     }
+  }
+
+  renderFallingChars(chars: FallingChar[]) {
+    this.ctx.save();
+    this.ctx.font = '24px "Press Start 2P", monospace';
+    this.ctx.textAlign = 'center';
+    this.ctx.textBaseline = 'middle';
+    
+    for (const fc of chars) {
+      if (fc.isDead) continue;
+      
+      // Draw a glowing trail
+      this.ctx.fillStyle = 'rgba(239, 68, 68, 0.3)'; // Redish trail
+      this.ctx.beginPath();
+      this.ctx.arc(fc.x, fc.y - fc.vy * 0.1, 15, 0, Math.PI * 2);
+      this.ctx.fill();
+      
+      this.ctx.fillStyle = '#ffffff';
+      this.ctx.shadowBlur = 10;
+      this.ctx.shadowColor = '#ef4444'; // Red glow
+      this.ctx.fillText(fc.char, fc.x, fc.y);
+      this.ctx.shadowBlur = 0;
+    }
+    
+    this.ctx.restore();
   }
 
   renderProjectiles(projectiles: Projectile[]) {
@@ -492,17 +569,18 @@ export class CanvasRenderer {
     this.ctx.font = '16px "Press Start 2P", monospace';
     this.ctx.fillStyle = '#ffffff';
     
-    const startY = this.height / 3 + 20;
-    const gap = 35;
+    const startY = this.height / 3 + 10;
+    const gap = 30;
     
-    this.ctx.fillText("[1] Stage 1: Home Position", this.width / 2, startY);
-    this.ctx.fillText("[2] Stage 2: Top & Bottom", this.width / 2, startY + gap);
-    this.ctx.fillText("[3] Stage 3: Words", this.width / 2, startY + gap * 2);
-    this.ctx.fillText("[4] Stage 4: Sentences", this.width / 2, startY + gap * 3);
-    this.ctx.fillText("[5] Stage 5: Long Text Boss", this.width / 2, startY + gap * 4);
+    this.ctx.fillText("[1] 1-1 Home Row", this.width / 2, startY);
+    this.ctx.fillText("[2] 1-2 Top Row", this.width / 2, startY + gap);
+    this.ctx.fillText("[3] 1-3 Bottom Row", this.width / 2, startY + gap * 2);
+    this.ctx.fillText("[4] Ch2 Short Words", this.width / 2, startY + gap * 3);
+    this.ctx.fillText("[5] Ch3 Short Sentences", this.width / 2, startY + gap * 4);
+    this.ctx.fillText("[6] Ch4 Full Sentences", this.width / 2, startY + gap * 5);
     
     this.ctx.fillStyle = '#d1d5db';
-    this.ctx.fillText("[ESC] BACK", this.width / 2, startY + gap * 6);
+    this.ctx.fillText("[ESC] BACK", this.width / 2, startY + gap * 7);
     
     this.ctx.restore();
   }

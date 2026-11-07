@@ -1,5 +1,4 @@
 import { getShapeParams } from './shapeMorpher';
-import { prepareWithSegments, layoutNextLine } from '@chenglou/pretext';
 
 export interface ShapeCell {
   id: number;
@@ -15,13 +14,11 @@ export function bakeShapeLayout(
   shape: string, 
   sourceText: string, 
   maxShapeSize: number, 
-  fontSize: number
+  fontSize: number,
+  strict: boolean = true
 ): { cells: ShapeCell[], totalTargetChars: number } {
   const font = `900 ${fontSize}px "Fira Code", monospace`;
   
-  const prepared = prepareWithSegments(sourceText, font);
-  
-  let cursor = { segmentIndex: 0, graphemeIndex: 0 };
   let currentY = 0;
   
   const cells: ShapeCell[] = [];
@@ -33,43 +30,73 @@ export function bakeShapeLayout(
   tempCtx.font = font;
   const charWidth = tempCtx.measureText('a').width;
 
-  while (currentY <= maxShapeSize && cursor.graphemeIndex < sourceText.length) {
+  // Split sourceText into words, keeping trailing spaces
+  // e.g. "hero brave " -> ["hero ", "brave "]
+  const words = sourceText.match(/\S+\s*/g) || [sourceText];
+  let wordIdx = 0;
+
+  while (currentY <= maxShapeSize && wordIdx < words.length) {
     const targetParams = getShapeParams(shape, currentY, maxShapeSize);
     
     for (let i = 0; i < targetParams.length; i++) {
       const targS = targetParams[i];
-      if (targS.w <= 5) continue;
+      if (targS.w <= charWidth) continue; // Skip tiny segments
       
-      const line = layoutNextLine(prepared, cursor, targS.w);
-      if (!line) break;
+      let segmentRemainingWidth = targS.w;
+      let segmentText = '';
       
-      // Center-align text within the shape's segment boundary for a more beautiful, balanced look
-      const textWidth = line.text.length * charWidth;
-      const xStart = targS.offsetX - (targS.w / 2) + Math.max(0, (targS.w - textWidth) / 2);
-      
-      let currentX = xStart;
-      let isFirstCharOnLine = true;
-      for (const char of line.text) {
-        if (isFirstCharOnLine && char === ' ') {
-          // Skip leading spaces to avoid ragged left edges
-          continue;
-        }
-        isFirstCharOnLine = false;
+      // Try to fit as many words as possible into this segment
+      while (wordIdx < words.length) {
+        const nextWord = words[wordIdx];
+        const nextWordWidth = nextWord.length * charWidth;
         
-        cells.push({
-          id: cellId++,
-          x: currentX,
-          y: currentY,
-          char: char,
-          isActive: true,
-          isTarget: false,
-          isSpace: char === ' '
-        });
-        currentX += charWidth;
+        if (segmentRemainingWidth >= nextWordWidth) {
+           segmentText += nextWord;
+           segmentRemainingWidth -= nextWordWidth;
+           wordIdx++;
+        } else if (segmentText.length === 0 && nextWordWidth > targS.w) {
+           // The word is larger than this entire segment.
+           const maxChars = Math.floor(targS.w / charWidth);
+           const requiredChars = strict ? 3 : 1;
+           if (maxChars >= requiredChars) {
+             const fitPart = nextWord.substring(0, maxChars);
+             const overflowPart = nextWord.substring(maxChars);
+             segmentText += fitPart;
+             words[wordIdx] = overflowPart; // Keep the rest for the next segment
+             break;
+           } else {
+             // We break here and try the next segment or line!
+             break;
+           }
+        } else {
+           // Word doesn't fit in the remaining space of this segment, move to next segment/line
+           break;
+        }
       }
       
-      cursor = line.end;
-      if (cursor.graphemeIndex >= sourceText.length) break;
+      if (segmentText.length > 0) {
+        // Center-align text within the shape's segment boundary for a more balanced look.
+        // We trim trailing spaces from the measurement so the visible letters are centered.
+        const trimmedText = segmentText.trimEnd();
+        const textWidth = trimmedText.length * charWidth;
+        const xStart = targS.offsetX - (targS.w / 2) + Math.max(0, (targS.w - textWidth) / 2);
+        
+        let currentX = xStart;
+        for (const char of segmentText) {
+          cells.push({
+            id: cellId++,
+            x: currentX,
+            y: currentY,
+            char: char,
+            isActive: true,
+            isTarget: false,
+            isSpace: char === ' '
+          });
+          currentX += charWidth;
+        }
+      }
+      
+      if (wordIdx >= words.length) break;
     }
     currentY += Math.floor(fontSize * 1.5);
   }

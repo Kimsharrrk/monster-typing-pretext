@@ -9,12 +9,14 @@ export class Projectile {
   isDead: boolean = false;
   damage: number = 5;
   cells: ShapeCell[] = [];
+  isHealing: boolean = false;
 
-  constructor(x: number, y: number, word: string, shape: string, vy: number) {
+  constructor(x: number, y: number, word: string, shape: string, vy: number, isHealing: boolean = false) {
     this.x = x;
     this.y = y;
     this.word = word;
     this.vy = vy;
+    this.isHealing = isHealing;
     
     // Repeat word to fill the shape
     const repeatedWord = (word + " ").repeat(100);

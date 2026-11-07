@@ -55,8 +55,8 @@ export class InputHandler {
     if (this.state.screen === 'STAGE_SELECT') {
       if (e.key === 'Escape') this.state.screen = 'MENU';
       const num = parseInt(e.key);
-      if (!isNaN(num) && num >= 1 && num <= 5) {
-        this.state.startingChapter = num;
+      if (!isNaN(num) && num >= 1 && num <= 6) {
+        this.state.startingLevel = num;
         this.onStart();
       }
       return;
@@ -81,6 +81,11 @@ export class InputHandler {
     }
 
     if (this.state.screen === 'PLAYING') {
+      if (e.key === 'Escape') {
+        this.state.screen = 'MENU';
+        return;
+      }
+      
       if (this.state.stageClearWaiting && e.key === 'Enter') {
         this.onNextStage();
         return;
@@ -106,6 +111,8 @@ export class InputHandler {
         
         if (this.state.activeMenu === 'FIGHT') {
           this.handleCharHit(e.key);
+          this.state.inputText = e.key.toLowerCase();
+          this.state.inputClearTimer = 0.5; // Clear after 500ms
         } else {
           if (e.key.match(/[a-zA-Z]/)) {
             this.state.inputText += e.key.toLowerCase();
@@ -113,7 +120,7 @@ export class InputHandler {
         }
       }
       
-      if (e.key === 'Backspace' && this.state.activeMenu !== 'FIGHT') {
+      if (e.key === 'Backspace') {
         this.state.inputText = this.state.inputText.slice(0, -1);
       }
       
@@ -191,35 +198,117 @@ export class InputHandler {
   }
 
   handleCharHit(char: string) {
-    // Check if hitting a projectile first
-    let hitProjectile = false;
-    let targetProj = this.state.projectiles.find(p => p.typeIndex > 0);
+    let hit = false;
+    let hitX = window.innerWidth / 2;
+    let hitY = 250;
     
-    if (targetProj) {
-        hitProjectile = targetProj.hitChar(char);
-    } else {
-        // Find a projectile starting with the key
-        targetProj = this.state.projectiles.find(p => p.word[0] === char);
-        if (targetProj) {
-            hitProjectile = targetProj.hitChar(char);
-        }
+    // 1. Alphabet Explosion
+    for (const exp of this.state.alphabetExplosions) {
+      if (exp.hitChar(char)) {
+        hit = true;
+        this.state.score += 50;
+        const active = exp.chars.find(c => c.isDead); // roughly find recently dead
+        if (active) { hitX = active.x; hitY = active.y; }
+        break;
+      }
     }
     
-    if (hitProjectile) {
-        const p = targetProj!;
-        if (p.isDead) {
-            this.state.score += 100;
-            this.state.damagePopups.push(new DamagePopup(p.x, p.y, 0)); // "DEFENDED"
+    // 2. FallingChars (Barrage)
+    if (!hit && this.state.isBarrageActive) {
+      for (const fc of this.state.fallingChars) {
+        if (fc.char === char) {
+          hit = true;
+          fc.isDead = true;
+          this.state.score += 20;
+          hitX = fc.x; hitY = fc.y;
+          this.state.damagePopups.push(new DamagePopup(hitX, hitY, 0)); // "DEFENDED"
+          break;
         }
-        this.state.particles.push(new Particle(p.x, p.y, char, '#ef4444', '20px "Press Start 2P", monospace'));
-        return;
+      }
+    }
+    
+    // 3. Text Bomb
+    if (!hit) {
+      for (const bomb of this.state.textBombs) {
+        if (bomb.hitChar(char)) {
+          hit = true;
+          this.state.score += 30;
+          hitX = bomb.x; hitY = bomb.y;
+          break;
+        }
+      }
     }
 
+    // 4. Word Shield
+    if (!hit) {
+      for (const shield of this.state.wordShields) {
+        if (shield.hitChar(char)) {
+          hit = true;
+          this.state.score += 40;
+          // Approximate hit location for particle
+          hitX = window.innerWidth / 2 + 100; hitY = 250;
+          break;
+        }
+      }
+    }
+
+    // 5. Projectiles
+    if (!hit) {
+      let targetProj = this.state.projectiles.find(p => p.typeIndex > 0);
+      if (!targetProj) {
+          targetProj = this.state.projectiles.find(p => p.word[0] === char);
+      }
+      if (targetProj && targetProj.hitChar(char)) {
+          hit = true;
+          hitX = targetProj.x; hitY = targetProj.y;
+          if (targetProj.isDead) {
+              this.state.score += 100;
+              if (targetProj.isHealing) {
+                this.state.playerHp = Math.min(this.state.playerMaxHp, this.state.playerHp + 20);
+                this.state.damagePopups.push(new DamagePopup(hitX, hitY, 0)); // "HEALED"
+                this.state.bossDialog = "* You absorbed the healing orb! (+20 HP)";
+              } else {
+                this.state.damagePopups.push(new DamagePopup(hitX, hitY, 0)); // "DEFENDED"
+              }
+          }
+      }
+    }
+    
+    // Process particles for non-boss hits
+    if (hit) {
+      this.state.particles.push(new Particle(hitX, hitY, char, '#ef4444', '20px "Press Start 2P", monospace'));
+      this.state.combo++;
+      return;
+    }
+
+    // 6. Boss
     const target = this.state.boss;
     if (!target) return;
     
+    // Disable normal boss typing during barrage
+    if (this.state.isBarrageActive) {
+      this.state.resetCombo();
+      this.state.shakeTimeRemaining = 0.1;
+      return;
+    }
+    
+    if (this.state.wordShields.length > 0) {
+      // Shield blocks boss damage
+      this.state.resetCombo();
+      this.state.shakeTimeRemaining = 0.1;
+      this.state.damagePopups.push(new DamagePopup(window.innerWidth / 2, 250, 0)); // MISS/BLOCKED
+      return;
+    }
+    
     const hitRes = target.hitChar(char);
     if (hitRes) {
+      // Cancel basic attack charge if charging
+      if (this.state.bossAttackState === 'CHARGING') {
+        this.state.bossAttackState = 'IDLE';
+        this.state.bossAttackTimer = 3.0; // Wait 3s before charging again
+        this.state.bossDialog = "* You interrupted the attack!";
+      }
+
       const cx = window.innerWidth / 2;
       const cy = 250; 
       const shapeTop = cy - target.width / 2;
@@ -245,7 +334,14 @@ export class InputHandler {
       this.state.resetCombo();
       this.state.shakeTimeRemaining = 0.1;
       
-      const expectedChar = target.getCurrentTargetChar();
+      const expectedChars = target.getCurrentTargetChars();
+      const expectedChar = expectedChars.length > 0 ? expectedChars[0] : null;
+      
+      // Ignore spacebar if it's not the expected character (prevents combo breaking when players instinctively press space between words)
+      if (char === ' ' && expectedChar !== ' ') {
+        return;
+      }
+      
       if (expectedChar !== null) {
         // Highlight wrong hit
         const cx = window.innerWidth / 2;
